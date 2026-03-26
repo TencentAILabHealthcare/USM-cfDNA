@@ -119,6 +119,7 @@ class VariantCaller(Predictor):
         cfg.dataset.min_depth = min_depth
         cfg.dataset.min_mapq = min_mapq
         cfg.dataset.chrs = chrs
+        self.output = output
         loader = self.build_dataloader(split="test")
         writer = self.make_writer(bam_file, output, snp_quality_threshold, indel_quality_threshold)
         assert self.model is not None, f"load model first."

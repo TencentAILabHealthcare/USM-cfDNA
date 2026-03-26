@@ -75,14 +75,25 @@ class CandidateSitIterDataset(IterableDataset):
         self.kwargs = kwargs
         self.bed_tree = bed_to_tree(self.bed_file) if self.bed_file is not None else None
         # support mutli-process
-        self.vf = parse_variant(self.vcf_file)
+        self.vf = None
+        self.af = None
         self.rf = None
         self.ref_seqs = {}
+
+    def get_vcf(self):
+        if self.vf is None:
+            self.vf = parse_variant(self.vcf_file)
+        return self.vf
 
     def get_ref(self):
         if self.rf is None:
             self.rf = parse_fasta(self.ref_file)
         return self.rf
+
+    def get_bam(self):
+        if self.af is None:
+            self.af = parse_alignment(self.bam_file)
+        return self.af
 
     def get_ref_seq(self, chrom, start=None, end=None):
         rf = self.get_ref()
@@ -108,15 +119,16 @@ class CandidateSitIterDataset(IterableDataset):
         return local_regions
 
     def __iter__(self):
-        af = parse_alignment(self.bam_file)
         rf = self.get_ref()
         regions = self.get_local_regions(rf)
+        af = self.get_bam()
         for (chrom, start, end) in regions:
             for data in candidate_sit_generator(
-                    af, rf,
+                    af,
+                    rf,
                     chrom, start, end,
                     bed_tree=self.bed_tree,
-                    vcf_file=self.vf,
+                    vcf_file=self.get_vcf(),
                     min_depth=self.min_depth,
                     min_bq=self.min_bq,
                     min_mapq=self.min_mapq,
@@ -127,7 +139,6 @@ class CandidateSitIterDataset(IterableDataset):
                     **self.kwargs
             ):
                 yield data
-        af.close()
 
     def collate_fn(self, batch):
         return batch
@@ -168,12 +179,18 @@ class CandidateMSAIterDataset(CandidateSitIterDataset):
         super().__init__(bam_file, ref_file, **kwargs)
         self.num_flanking = num_flanking
         self.joint_fragment = joint_fragment
-        # fetch support multiprocess
-        self.af = parse_alignment(self.bam_file)
+        # two bam handler, 1 pileup 2 fetch read
+        self.faf = None
+
+    def get_bam2(self):
+        if self.faf is None:
+            self.faf = parse_alignment(self.bam_file)
+        return self.faf
 
     def __iter__(self):
         num_flanking = self.num_flanking
         joint_fragment = self.joint_fragment
+        af = self.get_bam2()
         for candidate in super().__iter__():
             chrom = candidate["contig"]
             pos = candidate["position"]
@@ -183,7 +200,7 @@ class CandidateMSAIterDataset(CandidateSitIterDataset):
             if (ce - cs) != (2 * num_flanking + 1):
                 continue
 
-            reads = self.af.fetch(chrom, start=cs, end=ce, multiple_iterators=True)
+            reads = af.fetch(chrom, start=cs, end=ce)
             msa = make_sequencing_msa(reads, start=cs, end=ce, ref_seq=ref_seq, joint_fragment=joint_fragment)
             data = {
                 **candidate,
